@@ -7,6 +7,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 
+from generator import Generator
 
 class GAIL:
     """Class for training the GAIL algorithm 
@@ -111,40 +112,3 @@ class ExpertDataset(torch_data.Dataset):
     
     def __len__(self):
         return len(self.action)
-
-class Generator:
-    """the generator class
-    """
-    def __init__(self) -> None:
-        pass
-
-    def train_ppo(self):
-        """train using PPO (implemented here) 
-        (Basically, the sb3 PPO but with loss, containing the disc. output instead advantage function.
-        Replacing A with Q(s,a) changes the expression only by a constant (look TRPO, sec.5))
-        """
-        # 
-    
-    def train(self):
-        """train to maximize discriminator loss
-        """
-
-    def predict(self):
-        """predict from the policy 
-        """
-
-class Discriminator:
-    """the discriminator class
-    """
-    def __init__(self) -> None:
-        pass
-
-    def train(self, exp_demos):
-        """train to distinguish expert from generated data
-         Args:
-            exp_demos ([type]): expert trajectories 
-        """
-    
-    def predict(self):
-        """predict probability of being expert (HIGH)
-        """
