@@ -8,56 +8,55 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.evaluation import evaluate_policy
 
 from generator import Generator
+from discriminator import  Discriminator
 
 class GAIL:
     """Class for training the GAIL algorithm 
     """
 
-    def __init__(self) -> None:
+    def __init__(self, env_name) -> None:
         # self.env = gym.make(env_name)
+        self.env = gym.make(env_name)
+        self.env.seed(543)
+        self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], action_shape=self.env.action_space.n)
+        self.generator = Generator(self.env, self.env.observation_space.shape[0], self.env.action_space.n, self.discriminator)
 
-        self.generator = Generator()
-        self.discriminator = Discriminator()
-
-    def train_expert(self, env_name):
+    def train_expert(self):
         """train a model to generate expert demons with it
-        Args:
-            env_name ([type]): [description]
         """
-        env = gym.make(env_name)
         model = PPO(
             "MlpPolicy", 
-            env, 
+            self.env, 
             n_epochs=4,
             n_steps=256,
             verbose=1)
         model.learn(total_timesteps=100000)
-        model.save(env_name)
+        model.save(self.env.spec.id)
         return model
 
-    def get_demonstrations(self, env_name):
+    def get_demonstrations(self):
         """With the PPO expert policy, create expert demonstrations
         """
-        env = gym.make(env_name)
+        # env = gym.make(env_name)
+        env_name = self.env.spec.id
         try:
-            env = gym.make(env_name)
-            model = PPO.load(env_name, env=env)
+            model = PPO.load(env_name, env=self.env)
         except FileNotFoundError:
-            model = self.train_expert(env_name)
-        obs = env.reset()
+            model = self.train_expert()
+        obs = self.env.reset()
         flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
         for i in range(100):
             flat_trajectories
             flat_trajectories["state"].append(obs)
             action, _states = model.predict(obs, deterministic=True)
             flat_trajectories["action"].append(action)
-            obs, reward, done, info = env.step(action)
+            obs, reward, done, info = self.env.step(action)
             flat_trajectories["next_state"].append(obs)
             flat_trajectories["done"].append(done)
 
-            env.render()
+            self.env.render()
             if done:
-                obs = env.reset()
+                obs = self.env.reset()
         assert np.array_equal(flat_trajectories["state"][1], flat_trajectories["next_state"][0])
         assert np.array_equal(flat_trajectories["state"][2], flat_trajectories["next_state"][1])
         assert np.array_equal(flat_trajectories["state"][-1], flat_trajectories["next_state"][-2])
@@ -68,15 +67,24 @@ class GAIL:
                 shuffle=True,
                 drop_last=True,
             )
-        print(next(iter(expert_data_loader)))
-        return flat_trajectories
+        # print(next(iter(expert_data_loader)))
+        return expert_data_loader
         
-    def train(self, exp_demos):
+    def train(self, exp_demos=None):
         """train alternating the discriminator and the generator
 
         Args:
             exp_demos ([type]): expert trajectories 
         """
+        exp_dataloader = self.get_demonstrations()
+        for i, data in enumerate(exp_dataloader, 0):
+            disc_loss = self.discriminator.train(data, None)
+            if i % 10 == 0:
+                print(f'Batch {i}\tLast loss: {disc_loss}')
+
+
+
+        #self.generator.train(200, 10000)
     
     def generate(self, n_rollouts):
         """generates trajectories with the model on the self.env
