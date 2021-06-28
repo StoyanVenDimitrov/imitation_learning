@@ -10,6 +10,8 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from generator import Generator
 from discriminator import  Discriminator
 
+from dataset import Dataset
+
 class GAIL:
     """Class for training the GAIL algorithm 
     """
@@ -34,15 +36,16 @@ class GAIL:
         model.save(self.env.spec.id)
         return model
 
-    def get_demonstrations(self):
+    def get_demonstrations(self,  expert=False):
         """With the PPO expert policy, create expert demonstrations
         """
         # env = gym.make(env_name)
         env_name = self.env.spec.id
         try:
-            model = PPO.load(env_name, env=self.env)
+            model = PPO.load(env_name, env=self.env) # if expert else self.generator
         except FileNotFoundError:
-            model = self.train_expert()
+            model = self.train_expert() # if expert else self.generator.train(...)
+        
         obs = self.env.reset()
         flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
         for i in range(100):
@@ -60,7 +63,7 @@ class GAIL:
         assert np.array_equal(flat_trajectories["state"][1], flat_trajectories["next_state"][0])
         assert np.array_equal(flat_trajectories["state"][2], flat_trajectories["next_state"][1])
         assert np.array_equal(flat_trajectories["state"][-1], flat_trajectories["next_state"][-2])
-        expert_dataset = ExpertDataset(flat_trajectories)
+        expert_dataset = Dataset(flat_trajectories)
         expert_data_loader = torch_data.DataLoader(
                 expert_dataset,
                 batch_size=32,
@@ -76,9 +79,12 @@ class GAIL:
         Args:
             exp_demos ([type]): expert trajectories 
         """
-        exp_dataloader = self.get_demonstrations()
-        for i, data in enumerate(exp_dataloader, 0):
-            disc_loss = self.discriminator.train(data, None)
+        self.generator.train(420, 10000)
+        exp_dataloader = self.get_demonstrations(expert=True)
+        fake_dataloader = self.get_demonstrations()
+        # self.generator.generate_rollouts()
+        for i, (exp_data, fake_data) in enumerate(zip(exp_dataloader, fake_dataloader), 0):
+            disc_loss = self.discriminator.train(exp_data, fake_data)
             if i % 10 == 0:
                 print(f'Batch {i}\tLast loss: {disc_loss}')
 
@@ -101,22 +107,3 @@ class GAIL:
             trajectories (dict): trajectories
         """
         pass
-
-
-class ExpertDataset(torch_data.Dataset):
-    def __init__(self, flat_trajectories):
-        self.state = flat_trajectories["state"]
-        self.next_state = flat_trajectories["next_state"]
-        self.action = flat_trajectories["action"]
-        self.done = flat_trajectories["done"]
-        
-    def __getitem__(self, index):
-        return {
-            "state": self.state[index], 
-            "next_state": self.next_state[index],
-            "action": self.action[index],
-            "done": self.done[index]
-            }
-    
-    def __len__(self):
-        return len(self.action)

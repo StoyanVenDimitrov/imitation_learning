@@ -11,7 +11,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
+import torch.utils.data as torch_data
 
+from dataset import Dataset
 
 class Generator:
     """generator with actor-critic policy
@@ -40,7 +42,15 @@ class Generator:
             if done:
                 state = self.env.reset()
 
-        return trajectories
+        dataset = Dataset(trajectories)
+        data_loader = torch_data.DataLoader(
+                dataset,
+                batch_size=32,
+                shuffle=True,
+                drop_last=True,
+            )
+        # print(next(iter(expert_data_loader)))
+        return data_loader
 
     def train(self, num_of_episodes, num_of_steps):
         """train to maximize discriminator loss
