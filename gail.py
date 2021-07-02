@@ -3,9 +3,9 @@ import gym
 import numpy as np
 import torch as torch
 import torch.utils.data as torch_data
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.evaluation import evaluate_policy
+# from stable_baselines3 import PPO
+# from stable_baselines3.common.env_util import make_vec_env
+# from stable_baselines3.common.evaluation import evaluate_policy
 
 from generator import Generator
 from discriminator import  Discriminator
@@ -21,7 +21,7 @@ class GAIL:
         self.env = gym.make(env_name)
         self.env.seed(543)
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], action_shape=self.env.action_space.n)
-        self.generator = Generator(self.env, self.env.observation_space.shape[0], self.env.action_space.n, self.discriminator)
+        self.generator = Generator(self.env, None)
 
     def train_expert(self):
         """train a model to generate expert demons with it
@@ -41,19 +41,20 @@ class GAIL:
         """
         # env = gym.make(env_name)
         env_name = self.env.spec.id
-        try:
-            model = PPO.load(env_name, env=self.env) # if expert else self.generator
-        except FileNotFoundError:
-            model = self.train_expert() # if expert else self.generator.train(...)
+        if expert:
+            try:
+                model = PPO.load(env_name, env=self.env) # if expert else self.generator
+            except FileNotFoundError:
+                model = self.train_expert() # if expert else self.generator.train(...)
         if not expert:
-            model = Generator(self.env, self.env.observation_space.shape[0], self.env.action_space.n, self.discriminator)
-            model.train(420, 10000)
+            model = Generator(self.env, None)
+            model.ppo(epochs=3)
         obs = self.env.reset()
         flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
         for i in range(10000):
             flat_trajectories
             flat_trajectories["state"].append(obs)
-            action, _states = model.predict(obs)
+            action = model.predict(torch.as_tensor(obs, dtype=torch.float32))
             flat_trajectories["action"].append(action)
             obs, reward, done, info = self.env.step(action)
             flat_trajectories["next_state"].append(obs)
@@ -81,14 +82,15 @@ class GAIL:
         Args:
             exp_demos ([type]): expert trajectories 
         """
+        # self.generator.ppo()
         # self.generator.train(420, 10000)
-        exp_dataloader = self.get_demonstrations(expert=True)
+        # exp_dataloader = self.get_demonstrations(expert=True)
         fake_dataloader = self.get_demonstrations()
-        # self.generator.generate_rollouts()
-        for i, (exp_data, fake_data) in enumerate(zip(exp_dataloader, fake_dataloader), 0):
-            disc_loss = self.discriminator.train(exp_data, fake_data)
-            # if i % 10 == 0:
-            print(f'Batch {i}\tLast loss: {disc_loss}')
+        # # self.generator.generate_rollouts()
+        # for i, (exp_data, fake_data) in enumerate(zip(exp_dataloader, fake_dataloader), 0):
+        #     disc_loss = self.discriminator.train(exp_data, fake_data)
+        #     # if i % 10 == 0:
+        #     print(f'Batch {i}\tLast loss: {disc_loss}')
 
 
 

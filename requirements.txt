@@ -1,4 +1,15 @@
 jupyterlab
+cloudpickle
 gym
+ipython
+joblib
+matplotlib
+mpi4py
+numpy
+pandas
+pytest
+psutil
+scipy
+seaborn
 torch
-black
+tqdm
