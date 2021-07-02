@@ -1,7 +1,6 @@
 # actor-critic implementation taken from pytorch/examples
 
 import gym
-from example import select_action
 import numpy as np
 from itertools import count
 from collections import namedtuple
@@ -52,6 +51,14 @@ class Generator:
         # print(next(iter(expert_data_loader)))
         return data_loader
 
+    def predict(self, state):
+        """single action prediction
+
+        Args:
+            state ([type]): current state
+        """
+        return self.policy_net.select_action(state)
+
     def train(self, num_of_episodes, num_of_steps):
         """train to maximize discriminator loss
         """
@@ -66,21 +73,19 @@ class Generator:
 
             state = self.env.reset()
 
-            for _ in range(num_of_steps):
+            for j in range(num_of_steps):
                 action, log_prob, value = self.policy_net.select_action(state)
-                next_state, _, done, _  = self.env.step(action)
-                # next_state, _, done, _  = self.env(action)
-                # actions.append(action)
-                # states.append(state)
-                disc_input = np.concatenate([state, [action]])
-                reward = self.discriminator.forward(torch.from_numpy(disc_input))
+                next_state, reward, done, _  = self.env.step(action)
+                # disc_input = np.concatenate([state, [action]])
+                # reward = self.discriminator.forward(torch.from_numpy(disc_input))
                 rewards.append(reward)
                 ep_reward += reward
                 log_probs_buffer.append(log_prob)
                 values_buffer.append(value)
                 state = next_state
                 if done:
-                    break   
+                    print('episode len: ', j)
+                    break  
             
             running_reward = 0.05 * ep_reward + (1 - 0.05) * running_reward
                 
@@ -132,7 +137,7 @@ class Generator:
 
         # sum up all the values of policy_losses and value_losses
         loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
-
+        print(loss)
         # perform backprop
         loss.backward()
         self.optimizer.step()
@@ -197,13 +202,13 @@ class PolicyNet(nn.Module):
         return action.item(), m.log_prob(action), state_value
 
 
-def main():
-    env = gym.make('CartPole-v0')
-    env.seed(543)
-    generator = Generator(env, 4, 2, None)
-    generator.train(420, 10000)
-    actions, states, dones = generator.generate_rollouts(1000)
-    print(dones)
+# def main():
+#     env = gym.make('CartPole-v0')
+#     env.seed(543)
+#     generator = Generator(env, 4, 2, None)
+#     generator.train(420, 10000)
+#     actions, states, dones = generator.generate_rollouts(1000)
+#     print(dones)
 
-if __name__ == '__main__':
-    main()
+# if __name__ == '__main__':
+#     main()
