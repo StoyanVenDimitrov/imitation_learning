@@ -8,27 +8,7 @@ import ppo.core as core
 from ppo.utils.logx import EpochLogger
 from ppo.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from ppo.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-
-
-class Generator:
-    def __init__(self, env, discriminator) -> None:
-        self.env = env
-        self.discriminator = discriminator
-        self.policy = core.MLPActorCritic(env.observation_space, env.action_space)
-
-    def predict(self, state):
-        """return action give a state
-
-        Args:
-            state (observation): observation 
-        """
-        return self.policy.act(state)
-
-    def ppo(self, seed=0, 
-            steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-            vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-            target_kl=0.01, logger_kwargs=dict(), save_freq=10):
-        """
+"""
         Proximal Policy Optimization (by clipping), 
 
         with early stopping based on approximate KL
@@ -131,20 +111,25 @@ class Generator:
 
         """
 
-        # Special function to avoid certain slowdowns from PyTorch + MPI combo.
+
+class Generator:
+    def __init__(self, env, discriminator, seed=0, steps_per_epoch=4000, gamma=0.99, lam=0.97, pi_lr=3e-4,
+            vf_lr=1e-3, ) -> None:
+        self.env = env
+        self.discriminator = discriminator
+        self.policy = core.MLPActorCritic(env.observation_space, env.action_space)
+         # Special function to avoid certain slowdowns from PyTorch + MPI combo.
         setup_pytorch_for_mpi()
 
         # Set up logger and save configuration
-        logger = EpochLogger(**logger_kwargs)
-        logger.save_config(locals())
+        self.logger = EpochLogger(**dict())
+        # self.logger.save_config(locals())
 
         # Random seed
         seed += 10000 * proc_id()
         torch.manual_seed(seed)
         np.random.seed(seed)
-        mpi_fork(4)
-        # Instantiate environment
-        # env = env_fn()
+        #! mpi_fork(4)
         obs_dim = self.env.observation_space.shape
         act_dim = self.env.action_space.shape
 
@@ -153,89 +138,98 @@ class Generator:
 
         # Sync params across processes
         sync_params(self.policy)
+        # Set up model saving
+        self.logger.setup_pytorch_saver(self.policy)
 
         # Count variables
         var_counts = tuple(core.count_vars(module) for module in [self.policy.pi, self.policy.v])
-        logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
+        self.logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
         # Set up experience buffer
-        local_steps_per_epoch = int(steps_per_epoch / num_procs())
-        buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+        self.steps_per_epoch = steps_per_epoch
+        self.local_steps_per_epoch = int(steps_per_epoch / num_procs())
+        self.buf = PPOBuffer(obs_dim, act_dim, self.local_steps_per_epoch, gamma, lam)
+         # Set up optimizers for policy and value function
+        self.pi_optimizer = Adam(self.policy.pi.parameters(), lr=pi_lr)
+        self.vf_optimizer = Adam(self.policy.v.parameters(), lr=vf_lr)
 
-        # Set up function for computing PPO policy loss
-        def compute_loss_pi(data):
-            obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+    def predict(self, state):
+        """return action give a state
 
-            # Policy loss
-            pi, logp = self.policy.pi(obs, act)
-            ratio = torch.exp(logp - logp_old)
-            clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-            loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+        Args:
+            state (observation): observation 
+        """
+        return self.policy.act(state)
 
-            # Useful extra info
-            approx_kl = (logp_old - logp).mean().item()
-            ent = pi.entropy().mean().item()
-            clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-            clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-            pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+    # Set up function for computing PPO policy loss
+    def compute_loss_pi(self, data, clip_ratio=0.2,):
+        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
-            return loss_pi, pi_info
+        # Policy loss
+        pi, logp = self.policy.pi(obs, act)
+        ratio = torch.exp(logp - logp_old)
+        clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
+        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
-        # Set up function for computing value loss
-        def compute_loss_v(data):
-            obs, ret = data['obs'], data['ret']
-            return ((self.policy.v(obs) - ret)**2).mean()
+        # Useful extra info
+        approx_kl = (logp_old - logp).mean().item()
+        ent = pi.entropy().mean().item()
+        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
+        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-        # Set up optimizers for policy and value function
-        pi_optimizer = Adam(self.policy.pi.parameters(), lr=pi_lr)
-        vf_optimizer = Adam(self.policy.v.parameters(), lr=vf_lr)
+        return loss_pi, pi_info
 
-        # Set up model saving
-        logger.setup_pytorch_saver(self.policy)
+    # Set up function for computing value loss
+    def compute_loss_v(self, data):
+        obs, ret = data['obs'], data['ret']
+        return ((self.policy.v(obs) - ret)**2).mean()
 
-        def update():
-            data = buf.get()
+    def update(self, train_pi_iters=80, train_v_iters=80, target_kl=0.01):
+            data = self.buf.get()
 
-            pi_l_old, pi_info_old = compute_loss_pi(data)
+            pi_l_old, pi_info_old = self.compute_loss_pi(data)
             pi_l_old = pi_l_old.item()
-            v_l_old = compute_loss_v(data).item()
+            v_l_old = self.compute_loss_v(data).item()
 
             # Train policy with multiple steps of gradient descent
             for i in range(train_pi_iters):
-                pi_optimizer.zero_grad()
-                loss_pi, pi_info = compute_loss_pi(data)
+                self.pi_optimizer.zero_grad()
+                loss_pi, pi_info = self.compute_loss_pi(data)
                 kl = mpi_avg(pi_info['kl'])
                 if kl > 1.5 * target_kl:
-                    logger.log('Early stopping at step %d due to reaching max kl.'%i)
+                    self.logger.log('Early stopping at step %d due to reaching max kl.'%i)
                     break
                 loss_pi.backward()
                 mpi_avg_grads(self.policy.pi)    # average grads across MPI processes
-                pi_optimizer.step()
+                self.pi_optimizer.step()
 
-            logger.store(StopIter=i)
+            self.logger.store(StopIter=i)
 
             # Value function learning
             for i in range(train_v_iters):
-                vf_optimizer.zero_grad()
-                loss_v = compute_loss_v(data)
+                self.vf_optimizer.zero_grad()
+                loss_v = self.compute_loss_v(data)
                 loss_v.backward()
                 mpi_avg_grads(self.policy.v)    # average grads across MPI processes
-                vf_optimizer.step()
+                self.vf_optimizer.step()
 
             # Log changes from update
             kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-            logger.store(LossPi=pi_l_old, LossV=v_l_old,
+            self.logger.store(LossPi=pi_l_old, LossV=v_l_old,
                         KL=kl, Entropy=ent, ClipFrac=cf,
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
+    def ppo(self, epochs=50, max_ep_len=1000, save_freq=10):
+        
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
 
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            for t in range(local_steps_per_epoch):
+            for t in range(self.local_steps_per_epoch):
                 a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
 
                 next_o, r, d, _ = self.env.step(a)
@@ -243,15 +237,15 @@ class Generator:
                 ep_len += 1
 
                 # save and log
-                buf.store(o, a, r, v, logp)
-                logger.store(VVals=v)
+                self.buf.store(o, a, r, v, logp)
+                self.logger.store(VVals=v)
                 
                 # Update obs (critical!)
                 o = next_o
 
                 timeout = ep_len == max_ep_len
                 terminal = d or timeout
-                epoch_ended = t==local_steps_per_epoch-1
+                epoch_ended = t==self.local_steps_per_epoch-1
 
                 if terminal or epoch_ended:
                     if epoch_ended and not(terminal):
@@ -261,36 +255,36 @@ class Generator:
                         _, v, _ = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
                     else:
                         v = 0
-                    buf.finish_path(v)
+                    self.buf.finish_path(v)
                     if terminal:
                         # only save EpRet / EpLen if trajectory finished
-                        logger.store(EpRet=ep_ret, EpLen=ep_len)
+                        self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                     o, ep_ret, ep_len = self.env.reset(), 0, 0
 
 
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs-1):
-                logger.save_state({'env': self.env}, None)
+                self.logger.save_state({'env': self.env}, None)
 
             # Perform PPO update!
-            update()
+            self.update()
 
             # Log info about epoch
-            logger.log_tabular('Epoch', epoch)
-            logger.log_tabular('EpRet', with_min_and_max=True)
-            logger.log_tabular('EpLen', average_only=True)
-            logger.log_tabular('VVals', with_min_and_max=True)
-            logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-            logger.log_tabular('LossPi', average_only=True)
-            logger.log_tabular('LossV', average_only=True)
-            logger.log_tabular('DeltaLossPi', average_only=True)
-            logger.log_tabular('DeltaLossV', average_only=True)
-            logger.log_tabular('Entropy', average_only=True)
-            logger.log_tabular('KL', average_only=True)
-            logger.log_tabular('ClipFrac', average_only=True)
-            logger.log_tabular('StopIter', average_only=True)
-            logger.log_tabular('Time', time.time()-start_time)
-            logger.dump_tabular()
+            self.logger.log_tabular('Epoch', epoch)
+            self.logger.log_tabular('EpRet', with_min_and_max=True)
+            self.logger.log_tabular('EpLen', average_only=True)
+            self.logger.log_tabular('VVals', with_min_and_max=True)
+            self.logger.log_tabular('TotalEnvInteracts', (epoch+1)*self.steps_per_epoch)
+            self.logger.log_tabular('LossPi', average_only=True)
+            self.logger.log_tabular('LossV', average_only=True)
+            self.logger.log_tabular('DeltaLossPi', average_only=True)
+            self.logger.log_tabular('DeltaLossV', average_only=True)
+            self.logger.log_tabular('Entropy', average_only=True)
+            self.logger.log_tabular('KL', average_only=True)
+            self.logger.log_tabular('ClipFrac', average_only=True)
+            self.logger.log_tabular('StopIter', average_only=True)
+            self.logger.log_tabular('Time', time.time()-start_time)
+            self.logger.dump_tabular()
 
 # if __name__ == '__main__':
 #     import argparse

@@ -13,3 +13,4 @@ scipy
 seaborn
 torch
 tqdm
+json-tricks

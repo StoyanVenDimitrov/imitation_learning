@@ -96,6 +96,7 @@ class GAIL:
         # # self.generator.generate_rollouts()
         for _ in range(EPOCHS):
             for i, exp_data in enumerate(exp_dataloader, 0):
+                self.generator.ppo(epochs=1) 
                 fake_data = next(iter(self.get_demonstrations(expert=False)))
                 disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data)
                 if i % 10 == 0:
