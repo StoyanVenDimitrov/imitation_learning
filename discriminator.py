@@ -31,6 +31,8 @@ class Discriminator(nn.Module):
          Args:
             expert_trajectories ([type])
             policy_trajectories ([type])
+        Return:
+            error, mean of the predicted score for expert samples and same for the generator samples
         """
         criterion = nn.BCEWithLogitsLoss()
 
@@ -50,5 +52,5 @@ class Discriminator(nn.Module):
         errD.backward()
         self.optimizer.step()
 
-        return errD
+        return errD, torch.mean(expert_output), torch.mean(policy_output)
     

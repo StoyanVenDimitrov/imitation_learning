@@ -1,16 +1,22 @@
 import time
 import gym
+import json
 import numpy as np
 import torch as torch
 import torch.utils.data as torch_data
 # from stable_baselines3 import PPO
 # from stable_baselines3.common.env_util import make_vec_env
 # from stable_baselines3.common.evaluation import evaluate_policy
-
+import json_tricks
 from generator import Generator
 from discriminator import  Discriminator
 
 from dataset import Dataset
+
+EXPERT_TIMESTEPS = 10000
+GENERATOR_TIMESTEPS = 32
+EXPERT_TRAIN_EPOCHS = 5
+EPOCHS = 2
 
 class GAIL:
     """Class for training the GAIL algorithm 
@@ -23,58 +29,59 @@ class GAIL:
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], action_shape=self.env.action_space.n)
         self.generator = Generator(self.env, None)
 
-    def train_expert(self):
-        """train a model to generate expert demons with it
-        """
-        model = PPO(
-            "MlpPolicy", 
-            self.env, 
-            n_epochs=4,
-            n_steps=256,
-            verbose=1)
-        model.learn(total_timesteps=100000)
-        model.save(self.env.spec.id)
-        return model
 
     def get_demonstrations(self,  expert=False):
-        """With the PPO expert policy, create expert demonstrations
-        """
-        # env = gym.make(env_name)
         env_name = self.env.spec.id
         if expert:
             try:
-                model = PPO.load(env_name, env=self.env) # if expert else self.generator
+                with open(f'expert_{env_name}_demos.json', 'r') as fp:
+                    flat_trajectories = json_tricks.load(fp)
             except FileNotFoundError:
-                model = self.train_expert() # if expert else self.generator.train(...)
-        if not expert:
-            model = Generator(self.env, None)
-            model.ppo(epochs=3)
-        obs = self.env.reset()
-        flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
-        for i in range(10000):
-            flat_trajectories
-            flat_trajectories["state"].append(obs)
-            action = model.predict(torch.as_tensor(obs, dtype=torch.float32))
-            flat_trajectories["action"].append(action)
-            obs, reward, done, info = self.env.step(action)
-            flat_trajectories["next_state"].append(obs)
-            flat_trajectories["done"].append(done)
+                model = Generator(self.env, None)
+                model.ppo(epochs=EXPERT_TRAIN_EPOCHS)
+                flat_trajectories = self.generate_demonstrations(model, EXPERT_TIMESTEPS)
+                with open(f'expert_{env_name}_demos.json', 'w') as fp:
+                    json_tricks.dump(flat_trajectories, fp)
 
-            # self.env.render()
-            if done:
-                obs = self.env.reset()
+        if not expert:
+            flat_trajectories = self.generate_demonstrations(self.generator,GENERATOR_TIMESTEPS)
+
         assert np.array_equal(flat_trajectories["state"][1], flat_trajectories["next_state"][0])
         assert np.array_equal(flat_trajectories["state"][2], flat_trajectories["next_state"][1])
         assert np.array_equal(flat_trajectories["state"][-1], flat_trajectories["next_state"][-2])
         expert_dataset = Dataset(flat_trajectories)
         expert_data_loader = torch_data.DataLoader(
                 expert_dataset,
-                batch_size=32,
+                batch_size=GENERATOR_TIMESTEPS,
                 shuffle=True,
                 drop_last=True,
             )
-        # print(next(iter(expert_data_loader)))
         return expert_data_loader
+    
+    def generate_demonstrations(self, model, timesteps):
+            """generate demonstrations with a model for some timesteps
+            Args:
+                model (Generator): generator
+                timesteps (int): how many steps to generate
+            Returns:
+                [dict]: trajectories
+            """
+            obs = self.env.reset()
+            flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
+            for i in range(timesteps):
+                flat_trajectories
+                flat_trajectories["state"].append(obs)
+                action = model.predict(torch.as_tensor(obs, dtype=torch.float32))
+                flat_trajectories["action"].append(action)
+                obs, reward, done, info = self.env.step(action)
+                flat_trajectories["next_state"].append(obs)
+                flat_trajectories["done"].append(done)
+
+                # self.env.render()
+                if done:
+                    obs = self.env.reset()
+            return flat_trajectories
+
         
     def train(self):
         """train alternating the discriminator and the generator
@@ -84,13 +91,15 @@ class GAIL:
         """
         # self.generator.ppo()
         # self.generator.train(420, 10000)
-        # exp_dataloader = self.get_demonstrations(expert=True)
-        fake_dataloader = self.get_demonstrations()
+        exp_dataloader = self.get_demonstrations(expert=True)
+        fake_dataloader = self.get_demonstrations(expert=False)
         # # self.generator.generate_rollouts()
-        # for i, (exp_data, fake_data) in enumerate(zip(exp_dataloader, fake_dataloader), 0):
-        #     disc_loss = self.discriminator.train(exp_data, fake_data)
-        #     # if i % 10 == 0:
-        #     print(f'Batch {i}\tLast loss: {disc_loss}')
+        for _ in range(EPOCHS):
+            for i, exp_data in enumerate(exp_dataloader, 0):
+                fake_data = next(iter(self.get_demonstrations(expert=False)))
+                disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data)
+                if i % 10 == 0:
+                    print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
 
 
 

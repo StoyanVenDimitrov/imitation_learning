@@ -142,7 +142,7 @@ class Generator:
         seed += 10000 * proc_id()
         torch.manual_seed(seed)
         np.random.seed(seed)
-
+        mpi_fork(4)
         # Instantiate environment
         # env = env_fn()
         obs_dim = self.env.observation_space.shape
