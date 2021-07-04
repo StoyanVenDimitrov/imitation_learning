@@ -29,7 +29,7 @@ class GAIL:
         self.env = gym.make(env_name)
         self.env.seed(543)
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], action_shape=self.env.action_space.n)
-        self.generator = Generator(self.env, None)
+        self.generator = Generator(self.env, self.discriminator)
 
 
     def get_demonstrations(self,  expert=False):
@@ -91,7 +91,6 @@ class GAIL:
         Args:
             exp_demos ([type]): expert trajectories 
         """
-
         for epoch in range(EPOCHS):
             # for i, exp_data in enumerate(exp_dataloader, 0):
             # train all until the expert demos are over:
