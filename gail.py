@@ -14,9 +14,11 @@ from discriminator import  Discriminator
 from dataset import Dataset
 
 EXPERT_TIMESTEPS = 10000
-GENERATOR_TIMESTEPS = 32
+GENERATOR_TIMESTEPS = 1000
 EXPERT_TRAIN_EPOCHS = 5
-EPOCHS = 2
+
+BATCH_SIZE = 32
+EPOCHS = 7
 
 class GAIL:
     """Class for training the GAIL algorithm 
@@ -48,11 +50,11 @@ class GAIL:
 
         assert np.array_equal(flat_trajectories["state"][1], flat_trajectories["next_state"][0])
         assert np.array_equal(flat_trajectories["state"][2], flat_trajectories["next_state"][1])
-        assert np.array_equal(flat_trajectories["state"][-1], flat_trajectories["next_state"][-2])
+        # assert np.array_equal(flat_trajectories["state"][-1], flat_trajectories["next_state"][-2])
         expert_dataset = Dataset(flat_trajectories)
         expert_data_loader = torch_data.DataLoader(
                 expert_dataset,
-                batch_size=GENERATOR_TIMESTEPS,
+                batch_size=BATCH_SIZE,
                 shuffle=True,
                 drop_last=True,
             )
@@ -77,7 +79,7 @@ class GAIL:
                 flat_trajectories["next_state"].append(obs)
                 flat_trajectories["done"].append(done)
 
-                # self.env.render()
+                self.env.render()
                 if done:
                     obs = self.env.reset()
             return flat_trajectories
@@ -89,19 +91,28 @@ class GAIL:
         Args:
             exp_demos ([type]): expert trajectories 
         """
-        # self.generator.ppo()
-        # self.generator.train(420, 10000)
-        exp_dataloader = self.get_demonstrations(expert=True)
-        fake_dataloader = self.get_demonstrations(expert=False)
-        # # self.generator.generate_rollouts()
-        for _ in range(EPOCHS):
-            for i, exp_data in enumerate(exp_dataloader, 0):
-                self.generator.ppo(epochs=1) 
-                fake_data = next(iter(self.get_demonstrations(expert=False)))
-                disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data)
-                if i % 10 == 0:
-                    print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
 
+        for epoch in range(EPOCHS):
+            # for i, exp_data in enumerate(exp_dataloader, 0):
+            # train all until the expert demos are over:
+            expert_has_next = True
+            exp_dataloader = iter(self.get_demonstrations(expert=True))
+            while expert_has_next:
+                # generate policy demos and sample batches
+                for i, fake_data in enumerate(self.get_demonstrations(expert=False),0):
+                    try:
+                        # sample expert demos batch
+                        exp_data = next(exp_dataloader)
+                        # train the discriminator until the policy demos batches are over:
+                        disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data)
+                        if i % 10 == 0:
+                            print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
+                    except StopIteration:
+                        print(f'------------ Epoch {epoch + 1} finished! ------------')
+                        expert_has_next = False
+                        break
+                # train the generator 
+            self.generator.ppo(epochs=5)
 
 
         #self.generator.train(200, 10000)
