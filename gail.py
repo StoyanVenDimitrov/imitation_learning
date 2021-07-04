@@ -15,8 +15,8 @@ from dataset import Dataset
 
 EXPERT_TIMESTEPS = 10000
 GENERATOR_TIMESTEPS = 1000
-EXPERT_TRAIN_EPOCHS = 5
-
+EXPERT_TRAIN_EPOCHS = 50
+GENERATOR_TRAIN_EPOCHS = 3
 BATCH_SIZE = 32
 EPOCHS = 7
 
@@ -107,11 +107,11 @@ class GAIL:
                         if i % 10 == 0:
                             print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
                     except StopIteration:
-                        print(f'------------ Epoch {epoch + 1} finished! ------------')
                         expert_has_next = False
                         break
                 # train the generator 
-            self.generator.ppo(epochs=5)
+            self.generator.ppo(epochs=GENERATOR_TRAIN_EPOCHS)
+            print(f'------------ Epoch {epoch + 1} finished! ------------')
 
 
         #self.generator.train(200, 10000)

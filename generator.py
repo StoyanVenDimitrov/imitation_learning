@@ -234,7 +234,7 @@ class Generator:
 
                 next_o, r, d, _ = self.env.step(a)
                 if self.discriminator:
-                    r = self.discriminator.forward(
+                    score = self.discriminator.forward(
                         torch.cat(
                             (
                                 torch.as_tensor(o, dtype=torch.float32), 
@@ -242,7 +242,8 @@ class Generator:
                             )
                         )
                     )
-                    ep_ret += r.item()
+                    r = -(1 - score.item())
+                    ep_ret += r
                 else:
                     ep_ret += r
                 ep_len += 1
