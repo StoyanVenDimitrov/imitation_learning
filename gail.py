@@ -31,8 +31,15 @@ class GAIL:
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], action_shape=self.env.action_space.n)
         self.generator = Generator(self.env, self.discriminator)
 
-
     def get_demonstrations(self,  expert=False):
+        """get demonstrations from a expert/policy model
+
+        Args:
+            expert (bool, optional): [are these demonstrations from an expert]. Defaults to False.
+
+        Returns:
+            [torch.utils.data.DataLoader]: torch DataLoader object with the created data
+        """
         env_name = self.env.spec.id
         if expert:
             try:
@@ -71,7 +78,7 @@ class GAIL:
             obs = self.env.reset()
             flat_trajectories = {key: [] for key in ["state", "next_state", "action", "done"]}
             for i in range(timesteps):
-                flat_trajectories
+                # flat_trajectories
                 flat_trajectories["state"].append(obs)
                 action = model.predict(torch.as_tensor(obs, dtype=torch.float32))
                 flat_trajectories["action"].append(action)
@@ -83,8 +90,7 @@ class GAIL:
                 if done:
                     obs = self.env.reset()
             return flat_trajectories
-
-        
+       
     def train(self):
         """train alternating the discriminator and the generator
 
@@ -113,16 +119,12 @@ class GAIL:
             self.generator.ppo(epochs=GENERATOR_TRAIN_EPOCHS)
             print(f'------------ Epoch {epoch + 1} finished! ------------')
 
-
-        #self.generator.train(200, 10000)
-    
     def generate(self, n_rollouts):
         """generates trajectories with the model on the self.env
 
         Args:
             n_rollouts (int): number of gen trajectories
         """
-
 
     def rollout_stats(self, trajectories):
         """statistics for a set of imitation/expert trajectories
