@@ -1,13 +1,17 @@
+import time
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.nn.modules.activation import SELU
 from torch.optim import Adam
-import gym
-import time
+
 import ppo.core as core
 from ppo.utils.logx import EpochLogger
-from ppo.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from ppo.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from ppo.utils.mpi_pytorch import (mpi_avg_grads, setup_pytorch_for_mpi,
+                                   sync_params)
+from ppo.utils.mpi_tools import (mpi_avg, mpi_fork, mpi_statistics_scalar,
+                                 num_procs, proc_id)
+
 """
         Proximal Policy Optimization (by clipping), 
 
@@ -113,7 +117,7 @@ from ppo.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scala
 
 
 class Generator:
-    def __init__(self, env, discriminator, seed=0, steps_per_epoch=4000, gamma=0.99, lam=0.97, pi_lr=3e-4,
+    def __init__(self, env, discriminator, seed=0, steps_per_epoch=4000, max_ep_len=500, gamma=0.99, lam=0.97, pi_lr=3e-4,
             vf_lr=1e-3, ) -> None:
         self.env = env
         self.discriminator = discriminator
@@ -132,7 +136,7 @@ class Generator:
         #! mpi_fork(4)
         obs_dim = self.env.observation_space.shape
         act_dim = self.env.action_space.shape
-
+        self.max_ep_len = max_ep_len
         # Create actor-critic module
         # ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
@@ -152,6 +156,10 @@ class Generator:
          # Set up optimizers for policy and value function
         self.pi_optimizer = Adam(self.policy.pi.parameters(), lr=pi_lr)
         self.vf_optimizer = Adam(self.policy.v.parameters(), lr=vf_lr)
+
+        # Keep for plotting 
+        self.avg_ep_lens = []
+        self.avg_ep_rewards = []
 
     def predict(self, state):
         """return action give a state
@@ -221,18 +229,22 @@ class Generator:
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
-    def ppo(self, epochs=50, max_ep_len=1000, save_freq=10):
-        
+    def ppo(self, epochs=1, data=None):
+        # ! edited the original implementatiom to first train the discriminator
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
 
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            for t in range(self.local_steps_per_epoch):
-                a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
+            iterator = data if data else range(self.local_steps_per_epoch) 
+            for t in iterator:
+                if not data:
+                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32)) # ! keep for gradients
 
-                next_o, r, d, _ = self.env.step(a)
+                    next_o, r, d, _ = self.env.step(a)
+                else:
+                    o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
                 if self.discriminator:
                     score = self.discriminator.forward(
                         torch.cat(
@@ -242,7 +254,7 @@ class Generator:
                             )
                         )
                     )
-                    r = -(1 - score.item())
+                    r = -(1 - score.item()) # ! when using discriminator
                     ep_ret += r
                 else:
                     ep_ret += r
@@ -255,7 +267,7 @@ class Generator:
                 # Update obs (critical!)
                 o = next_o
 
-                timeout = ep_len == max_ep_len
+                timeout = ep_len == self.max_ep_len
                 terminal = d or timeout
                 epoch_ended = t==self.local_steps_per_epoch-1
 
@@ -274,13 +286,14 @@ class Generator:
                     o, ep_ret, ep_len = self.env.reset(), 0, 0
 
 
-            # Save model
-            if (epoch % save_freq == 0) or (epoch == epochs-1):
-                self.logger.save_state({'env': self.env}, None)
+
+            # # Save model
+            # if (epoch % save_freq == 0) or (epoch == epochs-1):
+            #     self.logger.save_state({'env': self.env}, None)
 
             # Perform PPO update!
             self.update()
-
+            
             # Log info about epoch
             self.logger.log_tabular('EpLen', average_only=True)
             self.logger.log_tabular('Epoch', epoch)

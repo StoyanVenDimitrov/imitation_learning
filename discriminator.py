@@ -9,7 +9,7 @@ from torch.nn.modules.activation import ReLU
 class Discriminator(nn.Module):
     """the discriminator class
     """
-    def __init__(self, state_shape, action_shape, hidden_shape=128):
+    def __init__(self, state_shape, hidden_shape=128):
 
         super(Discriminator, self).__init__()
         input_shape = state_shape + 1
