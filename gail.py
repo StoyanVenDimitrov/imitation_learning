@@ -1,26 +1,24 @@
 from re import A
-import time
+import datetime
 import gym
-import json
+import json_tricks
+import matplotlib.pyplot as plt
 import numpy as np
 import torch as torch
 import torch.utils.data as torch_data
-# from stable_baselines3 import PPO
-# from stable_baselines3.common.env_util import make_vec_env
-# from stable_baselines3.common.evaluation import evaluate_policy
-import json_tricks
 from torch.utils.data import dataset
-from generator import Generator
-from discriminator import  Discriminator
 
 from dataset import ExpertDataset, PolicyDataset
+from discriminator import Discriminator
+from generator import Generator
 
-EXPERT_TRAJECTORIES = 10
+EXPERT_TRAJECTORIES = 1
+EXPERT_TRAJECTORIES_LIST = [1, 4, 7, 10]
 GENERATOR_TIMESTEPS = 1000
 EXPERT_TRAIN_EPOCHS = 50
 # GENERATOR_TRAIN_EPOCHS = 3 #! must be a single one
 BATCH_SIZE = 32
-ITERATIONS = 300
+ITERATIONS = 100 #300
 MAX_EP_LEN = 1000
 
 class GAIL:
@@ -33,6 +31,7 @@ class GAIL:
         self.env.seed(543)
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0])
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
+        self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
 
     def get_demonstrations(self,  expert=False):
         """get demonstrations from an expert/policy model
@@ -46,14 +45,15 @@ class GAIL:
         env_name = self.env.spec.id
         if expert:
             try:
-                with open(f'expert_{env_name}_demos.json', 'r') as fp:
+                with open(f'expert_{env_name}_demos_{EXPERT_TRAJECTORIES}.json', 'r') as fp:
                     flat_trajectories = json_tricks.load(fp)
             except FileNotFoundError:
                 model = Generator(self.env, None)
                 model.ppo(epochs=EXPERT_TRAIN_EPOCHS)
-                flat_trajectories = self._generate_expert_demonstrations(model, EXPERT_TRAJECTORIES)
-                with open(f'expert_{env_name}_demos.json', 'w') as fp:
-                    json_tricks.dump(flat_trajectories, fp)
+                for num_trajectories in EXPERT_TRAJECTORIES_LIST:
+                    flat_trajectories = self._generate_expert_demonstrations(model, num_trajectories)
+                    with open(f'expert_{env_name}_demos_{num_trajectories}.json', 'w') as fp:
+                        json_tricks.dump(flat_trajectories, fp)
             return flat_trajectories
         if not expert:
             return self._generate_policy_demonstrations()
@@ -84,35 +84,45 @@ class GAIL:
         Args:
             exp_demos ([type]): expert trajectories 
         """
+        # for ploting
+        expert_means, policy_means = [], []
+        avg_ep_len, avg_ep_ret, probe_avg_ep_len = [], [], []
+        batches, iterations = [], []
+        disc_batch, gen_iter = 1, 1 
+        # generate expert demonstrations
         expert_demos = self.get_demonstrations(expert=True)
+        # get their avg episode length
+        expert_avg_len = self._expert_avg_len(expert_demos)
         expert_dataloader = self.create_dataloader(expert_demos, BATCH_SIZE, expert=True)
         for iteration in range(ITERATIONS):
             gen_trajectories_flat, gen_pairs = self.get_demonstrations(expert=False)
             gen_dataloader = self.create_dataloader(gen_trajectories_flat, BATCH_SIZE, expert=False) 
+
             # train the discriminator with batches:
             for i, fake_data in enumerate(gen_dataloader,0):
                 exp_data = next(iter(expert_dataloader))
                 disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data) 
                 if i % 10 == 0:
                     print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
-            self.generator.ppo(data=gen_pairs)     
-
-            # while policy_has_next:
-            #     # generate policy demos and sample batches
-            #     for i, fake_data in enumerate(self.get_demonstrations(expert=True),0):
-            #         try:
-            #             # sample expert demos batch
-            #             exp_data = next(iter(self.get_demonstrations(expert=True)))
-            #             # train the discriminator until the policy demos batches are over:
-            #             disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data)
-            #             if i % 10 == 0:
-            #                 print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
-            #         except StopIteration:
-            #             policy_has_next = False
-            #             break
-            #     # train the generator 
-            # self.generator.ppo() # (epochs=GENERATOR_TRAIN_EPOCHS)
-            # print(f'------------ Iteration {iteration + 1} finished! ------------')
+                # for the plots:
+                expert_means.append(expert_mean)
+                policy_means.append(policy_mean)
+                batches.append(disc_batch)
+                disc_batch += 1
+            # train the generator with all generator demonstrations
+            self.generator.ppo(data=gen_pairs)  
+            self.probe_generator.ppo()  
+            # for the plots:   
+            avg_ep_len.append(self.generator.avg_ep_len)
+            probe_avg_ep_len.append(self.probe_generator.avg_ep_len)
+            avg_ep_ret.append(self.generator.avg_ep_return)
+            iterations.append(gen_iter)
+            gen_iter += 1
+            print(f'------------ Iteration {iteration + 1} finished! ------------')
+        self._draw_gen_result(iterations, avg_ep_len, avg_ep_ret, expert_avg_len, probe_avg_ep_len)
+        plt.show()
+        self._draw_disc_result(batches, policy_means, expert_means)
+        plt.show()
 
     def _generate_expert_demonstrations(self, model, trajectories):
             """generate demonstrations with an expert model for some timesteps
@@ -123,9 +133,9 @@ class GAIL:
                 [dict]: trajectories
             """
             obs = self.env.reset()
-            done = False
             flat_trajectories = {key: [] for key in ["state", "action", "done"]}
             for i in range(trajectories):
+                done = False
                 while not done:
                     flat_trajectories["state"].append(obs)
                     action = model.predict(torch.as_tensor(obs, dtype=torch.float32))
@@ -181,3 +191,41 @@ class GAIL:
                     o, ep_len = self.env.reset(), 0
             
             return flat_trajectories, pairs
+
+    def _draw_gen_result(self, iters, avg_len, avg_ret, exp_avg, probe_avg_ep_len):
+        exp_avg_len = [exp_avg]*len(avg_len)
+        plt.plot(iters, avg_len, '-b', label='Average episode length')
+        plt.plot(iters, probe_avg_ep_len, '-c', label='Average episode length (original reward)')
+        plt.plot(iters, avg_ret, '-r', label='Average episode return')
+        plt.plot(iters, exp_avg_len, '-y', label='Average episode length (expert)')
+
+        plt.xlabel("n iteration")
+        plt.grid(color='g', linestyle='-', linewidth=0.1)
+        plt.legend(loc='upper left')
+        plt.title("Generator")
+
+        # save image
+        date = datetime.datetime.utcnow().strftime("%H:%M:%S_%b_%d_")
+        plt.savefig(f'plots/generator_{date}.png')  # should before show method
+
+    def _draw_disc_result(self, batches, policy_mean, expert_mean):
+        plt.plot(batches, policy_mean, '-b', label='mean policy score')
+        plt.plot(batches, expert_mean, '-r', label='mean expert score')
+
+        plt.xlabel("n batches")
+        plt.grid(color='g', linestyle='-', linewidth=0.1)
+        plt.legend(loc='upper left')
+        plt.title("Discriminator")
+
+        # save image
+        date = datetime.datetime.utcnow().strftime("%H:%M:%S_%b_%d_")
+        plt.savefig(f'plots/discriminator_{date}.png')  # should before show method
+
+    def _expert_avg_len(self, expert_trajectories):
+        """compute the average episode length for the expert demonstrations
+        Args:
+            expert_trajectories ([type]): the generate expert demonstrations
+        """
+        done_at = [i for i,d in  enumerate(expert_trajectories['done']) if d == True or i == 0]
+        lengths = [t - s for s, t in zip(done_at, done_at[1:])]
+        return sum(lengths)/len(lengths)

@@ -1,6 +1,5 @@
 import time
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -158,8 +157,8 @@ class Generator:
         self.vf_optimizer = Adam(self.policy.v.parameters(), lr=vf_lr)
 
         # Keep for plotting 
-        self.avg_ep_lens = []
-        self.avg_ep_rewards = []
+        self.avg_ep_len = 0.0
+        self.avg_ep_return = 0.0
 
     def predict(self, state):
         """return action give a state
@@ -312,6 +311,8 @@ class Generator:
             self.logger.log_tabular('ClipFrac', average_only=True)
             self.logger.log_tabular('StopIter', average_only=True)
             self.logger.log_tabular('Time', time.time()-start_time)
+            self.avg_ep_len = self.logger.log_current_row['EpLen']
+            self.avg_ep_return = self.logger.log_current_row['AverageEpRet']
             self.logger.dump_tabular()
 
 
