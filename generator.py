@@ -230,7 +230,6 @@ class Generator:
                         DeltaLossV=(loss_v.item() - v_l_old))
 
     def ppo(self, epochs=1, data=None):
-        # ! edited the original implementatiom to first train the discriminator
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
@@ -238,11 +237,12 @@ class Generator:
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
             iterator = data if data else range(self.local_steps_per_epoch) 
-            for t in iterator:
+            for i,t in enumerate(iterator):
                 if not data:
                     a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32)) # ! keep for gradients
 
                     next_o, r, d, _ = self.env.step(a)
+                # ! edited the original implementatiom to first train the discriminator
                 else:
                     o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
                 if self.discriminator:
@@ -269,7 +269,10 @@ class Generator:
 
                 timeout = ep_len == self.max_ep_len
                 terminal = d or timeout
-                epoch_ended = t==self.local_steps_per_epoch-1
+                if data:
+                    epoch_ended = i==len(data)-1
+                else:
+                    epoch_ended = t==self.local_steps_per_epoch-1
 
                 if terminal or epoch_ended:
                     if epoch_ended and not(terminal):
