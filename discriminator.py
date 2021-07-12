@@ -9,15 +9,15 @@ from torch.nn.modules.activation import ReLU
 class Discriminator(nn.Module):
     """the discriminator class
     """
-    def __init__(self, state_shape, hidden_shape=128):
+    def __init__(self, state_shape, hidden_shape=100):
 
         super(Discriminator, self).__init__()
         input_shape = state_shape + 1
         self.main = nn.Sequential(
             nn.Linear(in_features=input_shape, out_features=hidden_shape, bias=True),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(in_features=hidden_shape, out_features=hidden_shape, bias=True),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(in_features=hidden_shape, out_features=1, bias=True), # final
             nn.Sigmoid() # use BCEWithLogitsLoss instead
         )
