@@ -9,7 +9,7 @@ from torch.nn.modules.activation import ReLU
 class Discriminator(nn.Module):
     """the discriminator class
     """
-    def __init__(self, state_shape, hidden_shape=100):
+    def __init__(self, state_shape, hidden_shape=100, learning_rate=0.0002):
 
         super(Discriminator, self).__init__()
         input_shape = state_shape + 1
@@ -21,7 +21,7 @@ class Discriminator(nn.Module):
             nn.Linear(in_features=hidden_shape, out_features=1, bias=True), # final
             # nn.Sigmoid() # use BCEWithLogitsLoss instead
         )
-        self.optimizer = optim.Adam(self.parameters(), lr=0.0002)
+        self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
 
     def forward(self, input):
         return self.main(input.float())
@@ -63,5 +63,5 @@ class Discriminator(nn.Module):
             expert_output = torch.sigmoid(expert_output)
             policy_output = torch.sigmoid(policy_output)
 
-        return errD, torch.mean(expert_output).item(), torch.mean(policy_output).item()
+        return errD.item(), torch.mean(expert_output).item(), torch.mean(policy_output).item()
     
