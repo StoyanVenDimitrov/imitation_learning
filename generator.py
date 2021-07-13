@@ -2,6 +2,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.optim import Adam
 
 import ppo.core as core
@@ -245,16 +246,19 @@ class Generator:
                 else:
                     o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
                 if self.discriminator:
-                    score = self.discriminator.forward(
-                        torch.cat(
-                            (
-                                torch.as_tensor(o, dtype=torch.float32), 
-                                torch.unsqueeze(torch.as_tensor(a, dtype=torch.float32),0)
+                    with torch.no_grad(): 
+                        logits = self.discriminator.forward(
+                            torch.cat(
+                                (
+                                    torch.as_tensor(o, dtype=torch.float32), 
+                                    torch.unsqueeze(torch.as_tensor(a, dtype=torch.float32),0)
+                                )
                             )
                         )
-                    )
-                    r = -(1 - score.item()) # ! when using discriminator
-                    ep_ret += r
+                        score = -F.sigmoid(logits)
+                        r = score # ! when using discriminator
+                        # r = -(1 - score.item()) # ! when using discriminator
+                        ep_ret += r
                 else:
                     ep_ret += r
                 ep_len += 1

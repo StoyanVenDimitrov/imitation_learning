@@ -19,7 +19,7 @@ class Discriminator(nn.Module):
             nn.Linear(in_features=hidden_shape, out_features=hidden_shape, bias=True),
             nn.Tanh(),
             nn.Linear(in_features=hidden_shape, out_features=1, bias=True), # final
-            nn.Sigmoid() # use BCEWithLogitsLoss instead
+            # nn.Sigmoid() # use BCEWithLogitsLoss instead
         )
         self.optimizer = optim.Adam(self.parameters(), lr=0.0002)
 
@@ -35,8 +35,8 @@ class Discriminator(nn.Module):
         Return:
             error, mean of the predicted score for expert samples and same for the generator samples
         """
-        # criterion = nn.BCEWithLogitsLoss()
-        criterion = nn.BCELoss()
+        criterion = nn.BCEWithLogitsLoss()
+        # criterion = nn.BCELoss()
 
         # ! check network input 
         # cat_inputs = th.cat((obs, acts), dim=1)
@@ -46,8 +46,8 @@ class Discriminator(nn.Module):
         policy_output = torch.cat([self.forward(torch.cat((state, action))) 
                             for state, action in zip(policy_trajectories['state'], torch.unsqueeze(policy_trajectories['action'], 1))])
 
-        expert_labels = torch.ones_like(expert_output, dtype=torch.float)
-        policy_labels = torch.zeros_like(policy_output, dtype=torch.float)
+        expert_labels = torch.zeros_like(expert_output, dtype=torch.float)
+        policy_labels = torch.ones_like(policy_output, dtype=torch.float)
 
         errD_expert = criterion(expert_output, expert_labels)
         errD_policy = criterion(policy_output, policy_labels)
