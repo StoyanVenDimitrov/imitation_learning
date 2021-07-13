@@ -255,7 +255,7 @@ class Generator:
                                 )
                             )
                         )
-                        score = -F.sigmoid(logits)
+                        score = -torch.sigmoid(logits)
                         r = score # ! when using discriminator
                         # r = -(1 - score.item()) # ! when using discriminator
                         ep_ret += r

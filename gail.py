@@ -12,13 +12,13 @@ from dataset import ExpertDataset, PolicyDataset
 from discriminator import Discriminator
 from generator import Generator
 
-EXPERT_TRAJECTORIES = 1
+EXPERT_TRAJECTORIES = 10
 EXPERT_TRAJECTORIES_LIST = [1, 4, 7, 10]
-GENERATOR_TIMESTEPS = 1000
+GENERATOR_TIMESTEPS = 5000
 EXPERT_TRAIN_EPOCHS = 50
 # GENERATOR_TRAIN_EPOCHS = 3 #! must be a single one
 BATCH_SIZE = 32
-ITERATIONS = 100 #300
+ITERATIONS = 300
 MAX_EP_LEN = 1000
 
 class GAIL:
@@ -31,6 +31,7 @@ class GAIL:
         self.env.seed(543)
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0])
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
+        # make one generator that learns from the original reward
         self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
 
     def get_demonstrations(self,  expert=False):
@@ -110,6 +111,7 @@ class GAIL:
                 batches.append(disc_batch)
                 disc_batch += 1
             # train the generator with all generator demonstrations
+            # if iteration % 3 == 0:
             self.generator.ppo(data=gen_pairs)  
             self.probe_generator.ppo()  
             # for the plots:   
@@ -119,6 +121,7 @@ class GAIL:
             iterations.append(gen_iter)
             gen_iter += 1
             print(f'------------ Iteration {iteration + 1} finished! ------------')
+        
         self._draw_gen_result(iterations, avg_ep_len, avg_ep_ret, expert_avg_len, probe_avg_ep_len)
         plt.show()
         self._draw_disc_result(batches, policy_means, expert_means)
@@ -142,7 +145,6 @@ class GAIL:
                     flat_trajectories["action"].append(action)
                     obs, reward, done, info = self.env.step(action)
                     flat_trajectories["done"].append(done)
-
                     self.env.render()
                     if done:
                         obs = self.env.reset()
@@ -206,7 +208,7 @@ class GAIL:
 
         # save image
         date = datetime.datetime.utcnow().strftime("%H:%M:%S_%b_%d_")
-        plt.savefig(f'plots/generator_{date}.png')  # should before show method
+        plt.savefig(f'plots/generator_iter_{EXPERT_TRAJECTORIES}_{date}.png')  # should before show method
 
     def _draw_disc_result(self, batches, policy_mean, expert_mean):
         plt.plot(batches, policy_mean, '-b', label='mean policy score')
@@ -219,7 +221,7 @@ class GAIL:
 
         # save image
         date = datetime.datetime.utcnow().strftime("%H:%M:%S_%b_%d_")
-        plt.savefig(f'plots/discriminator_{date}.png')  # should before show method
+        plt.savefig(f'plots/discriminator_iter_{EXPERT_TRAJECTORIES}_{date}.png')  # should before show method
 
     def _expert_avg_len(self, expert_trajectories):
         """compute the average episode length for the expert demonstrations

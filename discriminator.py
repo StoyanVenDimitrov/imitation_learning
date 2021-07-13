@@ -59,5 +59,9 @@ class Discriminator(nn.Module):
 
         self.optimizer.step()
 
+        with torch.no_grad():
+            expert_output = torch.sigmoid(expert_output)
+            policy_output = torch.sigmoid(policy_output)
+
         return errD, torch.mean(expert_output).item(), torch.mean(policy_output).item()
     
