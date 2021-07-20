@@ -31,11 +31,9 @@ class GAIL:
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         self.avg_rew_generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         self.avg_rew_generator.load_state_dict(self.generator.state_dict())
-        self.avg_rew_generator.eval()
         # make one generator that learns from the original reward
         # self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         # self.probe_generator.load_state_dict(self.generator.state_dict())
-        # self.probe_generator.eval()
 
     def get_demonstrations(self,  expert=False):
         """get demonstrations from an expert/policy model
