@@ -63,5 +63,5 @@ class Discriminator(nn.Module):
             expert_output = torch.sigmoid(expert_output)
             policy_output = torch.sigmoid(policy_output)
 
-        return errD.item(), torch.mean(expert_output).item(), torch.mean(policy_output).item()
+        return errD.item(), torch.mean(expert_output).item(), torch.mean(policy_output).item(), expert_output, policy_output
     

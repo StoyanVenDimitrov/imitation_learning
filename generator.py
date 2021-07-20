@@ -229,38 +229,59 @@ class Generator:
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
-    def ppo(self, epochs=1, data=None):
+    def ppo(self, epochs=1, data=None, avg_reward=False):
+        """train with ppo
+
+        Args:
+            epochs (int, optional): training epoch. Defaults to 1.
+            data (list[Dict], optional): complete samples of (s,a,v,logp,s',r,d). Defaults to None.
+            avg_reward (bool, optional): If using disc, whether to use the average for the rewards. Defaults to False.
+        """
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
-
+        buf = 0
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            iterator = data if data else range(self.local_steps_per_epoch) 
-            for i,t in enumerate(iterator):
-                if not data:
-                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32)) # ! keep for gradients
-
-                    next_o, r, d, _ = self.env.step(a)
-                # ! edited the original implementatiom to first train the discriminator
-                else:
-                    o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
+            for sample in  data:
                 if self.discriminator:
                     with torch.no_grad(): 
                         logits = self.discriminator.forward(
                             torch.cat(
                                 (
-                                    torch.as_tensor(o, dtype=torch.float32), 
-                                    torch.unsqueeze(torch.as_tensor(a, dtype=torch.float32),0)
+                                    torch.as_tensor(sample['state'], dtype=torch.float32), 
+                                    torch.unsqueeze(torch.as_tensor(sample['action'], dtype=torch.float32),0)
                                 )
                             )
                         )
                         score = -torch.sigmoid(logits)
-                        r = score # ! when using discriminator
-                        # r = -(1 - score.item()) # ! when using discriminator
-                        ep_ret += r
+                        sample['reward'] = score
+            if avg_reward:
+                avg = torch.mean(torch.cat([i['reward'] for i in data]))
+                for sample in data:
+                    sample['reward'] = torch.unsqueeze(avg,0)
+            iterator = data if data else range(self.local_steps_per_epoch) 
+            for i,t in enumerate(iterator):
+                # when training the expert:
+                if not data:
+                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32)) # ! keep for gradients
+
+                    next_o, r, d, _ = self.env.step(a)
+                    buf += 1
+                    if d:
+                        if buf<self.max_ep_len:
+                            r = - 1.0 
+                            buf = 0
+                        else:
+                            r = 0.0
+                    else:
+                        r = 0.0
+                # ! edited the original implementatiom to first train the discriminator
+                # when training the generator policy:
                 else:
-                    ep_ret += r
+                    o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
+                # Get the discriminator scores and keep them as reward
+                ep_ret += r
                 ep_len += 1
 
                 # save and log

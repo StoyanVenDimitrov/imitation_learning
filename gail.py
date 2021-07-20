@@ -1,13 +1,9 @@
-from re import A
 import datetime
 import gym
 import json_tricks
 import matplotlib.pyplot as plt
-import numpy as np
 import torch as torch
-from torch.utils import data
 import torch.utils.data as torch_data
-from torch.utils.data import dataset
 
 from dataset import ExpertDataset, PolicyDataset
 from discriminator import Discriminator
@@ -18,7 +14,7 @@ EXPERT_TRAJECTORIES_LIST = [1, 4, 7, 10]
 GENERATOR_TIMESTEPS = 5000
 EXPERT_TRAIN_EPOCHS = 50
 BATCH_SIZE = 32
-ITERATIONS = 300 #300
+ITERATIONS = 100 #300
 MAX_EP_LEN = 1000
 DISC_ITER = -1
 DISC_L_RATE = 0.0002
@@ -33,8 +29,13 @@ class GAIL:
         self.env.seed(543)
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], learning_rate=DISC_L_RATE)
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
+        self.avg_rew_generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
+        self.avg_rew_generator.load_state_dict(self.generator.state_dict())
+        self.avg_rew_generator.eval()
         # make one generator that learns from the original reward
         # self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
+        # self.probe_generator.load_state_dict(self.generator.state_dict())
+        # self.probe_generator.eval()
 
     def get_demonstrations(self,  expert=False):
         """get demonstrations from an expert/policy model
@@ -111,8 +112,8 @@ class GAIL:
             # train the discriminator with batches:
             for i, fake_data in enumerate(gen_dataloader,0):
                 exp_data = next(iter(expert_dataloader))
-                disc_loss, expert_mean, policy_mean = self.discriminator.train(exp_data, fake_data) 
-                if i % 10 == 0:
+                disc_loss, expert_mean, policy_mean, expert_output, policy_output = self.discriminator.train(exp_data, fake_data) 
+                if i % 3 == 0:
                     print(f'Batch {i}\t Discriminator: loss: {disc_loss}\t expert mean {expert_mean} \t generator mean {policy_mean}')
                 # for the plots:
                 expert_means.append(expert_mean)
@@ -120,7 +121,7 @@ class GAIL:
                 disc_losses.append(disc_loss)
                 batches.append(disc_batch)
                 disc_batch += 1
-            # eventually, pretrain the discriinator
+            # eventually, pretrain the discriinator; default is DISC_ITER = -1
             if iteration > DISC_ITER:
                 # train the generator with all generator demonstrations
                 self.generator.ppo(data=gen_pairs)  
@@ -133,7 +134,7 @@ class GAIL:
                 gen_iter += 1
                 print(f'------------ Iteration {iteration + 1} finished! ------------')
         
-        self._draw_gen_result(iterations, avg_ep_len, expert_avg_len)
+        self._draw_gen_result(iterations, avg_ep_len, expert_avg_len)#, probe_avg_ep_len)
         plt.show()
         self._draw_disc_result(batches, policy_means, expert_means, disc_losses)
         plt.show()
@@ -205,7 +206,7 @@ class GAIL:
             
             return flat_trajectories, pairs
 
-    def _draw_gen_result(self, iters, avg_len, exp_avg):
+    def _draw_gen_result(self, iters, avg_len, exp_avg):#, probe_avg_ep_len):
         exp_avg_len = [exp_avg]*len(avg_len)
         plt.plot(iters, avg_len, '-b', label='Average episode length')
         # plt.plot(iters, probe_avg_ep_len, '-c', label='Average episode length (original reward)')
@@ -224,7 +225,7 @@ class GAIL:
     def _draw_disc_result(self, batches, policy_mean, expert_mean, disc_losses):
         plt.plot(batches, policy_mean, '-b', label='mean policy score')
         plt.plot(batches, expert_mean, '-r', label='mean expert score')
-        plt.plot(batches, disc_losses, '-y', label='discriminator loss')
+        # plt.plot(batches, disc_losses, '-y', label='discriminator loss')
 
         plt.xlabel("n batches")
         plt.grid(color='g', linestyle='-', linewidth=0.1)
