@@ -56,7 +56,6 @@ class Discriminator(nn.Module):
         errD_policy.backward()
 
         errD = errD_expert + errD_policy
-
         self.optimizer.step()
 
         with torch.no_grad():

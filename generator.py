@@ -239,27 +239,10 @@ class Generator:
         """
         # Prepare for interaction with environment
         start_time = time.time()
-        report_object = {'reward_std_dev':[],}
         o, ep_ret, ep_len = self.env.reset(), 0, 0
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            # prepare the rewards, if using discriminator
-            # if data:
-            #     for sample in  data:
-            #         if self.discriminator:
-            #             with torch.no_grad(): 
-            #                 logits = self.discriminator.forward(
-            #                     torch.cat(
-            #                         (
-            #                             torch.as_tensor(sample['state'], dtype=torch.float32), 
-            #                             torch.unsqueeze(torch.as_tensor(sample['action'], dtype=torch.float32),0)
-            #                         )
-            #                     )
-            #                 )
-            #                 score = -torch.sigmoid(logits)
-            #                 sample['reward'] = score
-            #     std_dev = torch.std(torch.cat([i['reward'] for i in data]))
-            #     less_than_expert_mean = torch.cat([i['reward'] for i in data if i['reward']>-0.52])
+            
             if avg_reward:
                 avg = torch.mean(torch.cat([i['reward'] for i in data]))
                 for sample in data:
