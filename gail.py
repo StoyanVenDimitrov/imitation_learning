@@ -30,7 +30,7 @@ class GAIL:
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], learning_rate=DISC_L_RATE)
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         self.avg_rew_generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
-        self.avg_rew_generator.load_state_dict(self.generator.state_dict())
+        self.avg_rew_generator.load_state_dict(self.generator.get_state_dict())
         # make one generator that learns from the original reward
         # self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         # self.probe_generator.load_state_dict(self.generator.state_dict())
@@ -92,6 +92,7 @@ class GAIL:
         disc_losses, expert_means, policy_means = [], [], []
         avg_ep_len, avg_ep_ret, probe_avg_ep_len = [], [], []
         batches, iterations = [], []
+        rew_dev, expert_scores = [], []
         disc_batch, gen_iter = 1, 1 
         # generate expert demonstrations
         expert_demos = self.get_demonstrations(expert=True)
@@ -107,7 +108,7 @@ class GAIL:
             gen_trajectories_flat, gen_pairs = self.get_demonstrations(expert=False)
             gen_dataloader = self.create_dataloader(gen_trajectories_flat, batch_size, expert=False) 
 
-            # train the discriminator with batches:
+            # train the discriminator on batches:
             for i, fake_data in enumerate(gen_dataloader,0):
                 exp_data = next(iter(expert_dataloader))
                 disc_loss, expert_mean, policy_mean, expert_output, policy_output = self.discriminator.train(exp_data, fake_data) 
@@ -122,11 +123,16 @@ class GAIL:
             # eventually, pretrain the discriinator; default is DISC_ITER = -1
             if iteration > DISC_ITER:
                 # train the generator with all generator demonstrations
-                self.generator.ppo(data=gen_pairs)  
-                # self.probe_generator.ppo()  
+                data = self._assign_rewards(gen_pairs)
+                
+                self.generator.ppo(data=data)  
+                self.avg_rew_generator.ppo()#(data=gen_pairs, avg_reward=True)
+
                 # for the plots:   
+                rew_stdcev, less_than_mean = self._reward_statistics(data, expert_mean)
+                rew_dev.append(rew_stdcev)
+                expert_scores.append(less_than_mean)
                 avg_ep_len.append(self.generator.avg_ep_len)
-                # probe_avg_ep_len.append(self.probe_generator.avg_ep_len)
                 avg_ep_ret.append(self.generator.avg_ep_return)
                 iterations.append(gen_iter)
                 gen_iter += 1
@@ -136,6 +142,38 @@ class GAIL:
         plt.show()
         self._draw_disc_result(batches, policy_means, expert_means, disc_losses)
         plt.show()
+        self._draw_score_statitics(iterations, rew_dev, expert_scores)
+    
+    def _assign_rewards(self, data):
+        """assign discriminator scores to the generated trajectories  
+
+        Args:
+            data ([type]): trajectories
+        """
+        for sample in  data:
+            with torch.no_grad(): 
+                logits = self.discriminator.forward(
+                    torch.cat(
+                        (
+                            torch.as_tensor(sample['state'], dtype=torch.float32), 
+                            torch.unsqueeze(torch.as_tensor(sample['action'], dtype=torch.float32),0)
+                        )
+                    )
+                )
+                score = -torch.sigmoid(logits)
+                sample['reward'] = score
+        std_dev = torch.std(torch.cat([i['reward'] for i in data]))
+        return data, std_dev
+
+    def _reward_statistics(self, data, expert_mean):
+        """get some reward statistics from current iteration
+
+        Args:
+            data ([type]): the current trajectories
+        """
+        std_dev = torch.std(torch.cat([i['reward'] for i in data]))
+        less_than_expert_mean = torch.cat([i['reward'] for i in data if i['reward'] > -expert_mean])
+        return std_dev, less_than_expert_mean
 
     def _generate_expert_demonstrations(self, model, trajectories):
             """generate demonstrations with an expert model for some timesteps
@@ -161,7 +199,7 @@ class GAIL:
             return flat_trajectories
 
     def _generate_policy_demonstrations(self):
-            """generate demonstrations with an expert model for some timesteps
+            """generate demonstrations with the current generator for some timesteps
             Args:
                 model (Generator): generator
                 timesteps (int): how many steps to generate
@@ -204,10 +242,11 @@ class GAIL:
             
             return flat_trajectories, pairs
 
-    def _draw_gen_result(self, iters, avg_len, exp_avg):#, probe_avg_ep_len):
+    def _draw_gen_result(self, iters, avg_len, exp_avg, probe_avg_ep_len=None):
         exp_avg_len = [exp_avg]*len(avg_len)
+        if probe_avg_ep_len:
+            plt.plot(iters, probe_avg_ep_len, '-c', label='Average episode length (averaged reward)')
         plt.plot(iters, avg_len, '-b', label='Average episode length')
-        # plt.plot(iters, probe_avg_ep_len, '-c', label='Average episode length (original reward)')
         # plt.plot(iters, avg_ret, '-r', label='Average episode return')
         plt.plot(iters, exp_avg_len, '-y', label='Average episode length (expert)')
 
@@ -233,6 +272,15 @@ class GAIL:
         # save image
         date = datetime.datetime.utcnow().strftime("%H:%M:%S_%b_%d_")
         plt.savefig(f'plots/discriminator_iter_{EXPERT_TRAJECTORIES}_{date}.png')  # should before show method
+    
+    def _draw_score_statitics(self,iterations, rew_dev, expert_scores):
+        """draw statistics for the rewards assignet to the generated trajectories
+
+        Args:
+            iterations ([list]): train iterations 
+            rew_dev (list): std deviation of the predicted scores
+            expert_scores (list): number of scores less than the avg expert score
+        """
 
     def _expert_avg_len(self, expert_trajectories):
         """compute the average episode length for the expert demonstrations

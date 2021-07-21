@@ -229,7 +229,7 @@ class Generator:
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
-    def ppo(self, epochs=1, data=None, avg_reward=False):
+    def ppo(self, data=None, epochs=1, avg_reward=False):
         """train with ppo
 
         Args:
@@ -239,47 +239,42 @@ class Generator:
         """
         # Prepare for interaction with environment
         start_time = time.time()
+        report_object = {'reward_std_dev':[],}
         o, ep_ret, ep_len = self.env.reset(), 0, 0
-        buf = 0
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            for sample in  data:
-                if self.discriminator:
-                    with torch.no_grad(): 
-                        logits = self.discriminator.forward(
-                            torch.cat(
-                                (
-                                    torch.as_tensor(sample['state'], dtype=torch.float32), 
-                                    torch.unsqueeze(torch.as_tensor(sample['action'], dtype=torch.float32),0)
-                                )
-                            )
-                        )
-                        score = -torch.sigmoid(logits)
-                        sample['reward'] = score
+            # prepare the rewards, if using discriminator
+            # if data:
+            #     for sample in  data:
+            #         if self.discriminator:
+            #             with torch.no_grad(): 
+            #                 logits = self.discriminator.forward(
+            #                     torch.cat(
+            #                         (
+            #                             torch.as_tensor(sample['state'], dtype=torch.float32), 
+            #                             torch.unsqueeze(torch.as_tensor(sample['action'], dtype=torch.float32),0)
+            #                         )
+            #                     )
+            #                 )
+            #                 score = -torch.sigmoid(logits)
+            #                 sample['reward'] = score
+            #     std_dev = torch.std(torch.cat([i['reward'] for i in data]))
+            #     less_than_expert_mean = torch.cat([i['reward'] for i in data if i['reward']>-0.52])
             if avg_reward:
                 avg = torch.mean(torch.cat([i['reward'] for i in data]))
                 for sample in data:
                     sample['reward'] = torch.unsqueeze(avg,0)
             iterator = data if data else range(self.local_steps_per_epoch) 
             for i,t in enumerate(iterator):
-                # when training the expert:
-                if not data:
-                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32)) # ! keep for gradients
-
-                    next_o, r, d, _ = self.env.step(a)
-                    buf += 1
-                    if d:
-                        if buf<self.max_ep_len:
-                            r = - 1.0 
-                            buf = 0
-                        else:
-                            r = 0.0
-                    else:
-                        r = 0.0
                 # ! edited the original implementatiom to first train the discriminator
                 # when training the generator policy:
-                else:
+                if data:
                     o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
+                # when training the expert:
+                else:
+                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
+
+                    next_o, r, d, _ = self.env.step(a)
                 # Get the discriminator scores and keep them as reward
                 ep_ret += r
                 ep_len += 1
@@ -312,12 +307,6 @@ class Generator:
                         self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                     o, ep_ret, ep_len = self.env.reset(), 0, 0
 
-
-
-            # # Save model
-            # if (epoch % save_freq == 0) or (epoch == epochs-1):
-            #     self.logger.save_state({'env': self.env}, None)
-
             # Perform PPO update!
             self.update()
             
@@ -339,6 +328,21 @@ class Generator:
             self.avg_ep_len = self.logger.log_current_row['EpLen']
             self.avg_ep_return = self.logger.log_current_row['AverageEpRet']
             self.logger.dump_tabular()
+
+    def load_state_dict(self, state_dict):
+        """apply nn.module.load_state_dict() on the policy
+
+        Args:
+            state_dict (dict): the parameters of another policy
+        """
+        self.policy.load_state_dict(state_dict)
+    
+    def get_state_dict(self):
+        """return the policy state, to apply it on another policy
+        """
+        return self.policy.state_dict()
+
+
 
 
 class PPOBuffer:
@@ -414,4 +418,3 @@ class PPOBuffer:
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
-
