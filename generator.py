@@ -1,13 +1,17 @@
+import time
+
 import numpy as np
 import torch
-from torch.nn.modules.activation import SELU
+import torch.nn.functional as F
 from torch.optim import Adam
-import gym
-import time
+
 import ppo.core as core
 from ppo.utils.logx import EpochLogger
-from ppo.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from ppo.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from ppo.utils.mpi_pytorch import (mpi_avg_grads, setup_pytorch_for_mpi,
+                                   sync_params)
+from ppo.utils.mpi_tools import (mpi_avg, mpi_fork, mpi_statistics_scalar,
+                                 num_procs, proc_id)
+
 """
         Proximal Policy Optimization (by clipping), 
 
@@ -113,7 +117,7 @@ from ppo.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scala
 
 
 class Generator:
-    def __init__(self, env, discriminator, seed=0, steps_per_epoch=4000, gamma=0.99, lam=0.97, pi_lr=3e-4,
+    def __init__(self, env, discriminator, seed=0, steps_per_epoch=4000, max_ep_len=500, gamma=0.99, lam=0.97, pi_lr=3e-4,
             vf_lr=1e-3, ) -> None:
         self.env = env
         self.discriminator = discriminator
@@ -132,7 +136,7 @@ class Generator:
         #! mpi_fork(4)
         obs_dim = self.env.observation_space.shape
         act_dim = self.env.action_space.shape
-
+        self.max_ep_len = max_ep_len
         # Create actor-critic module
         # ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
@@ -152,6 +156,10 @@ class Generator:
          # Set up optimizers for policy and value function
         self.pi_optimizer = Adam(self.policy.pi.parameters(), lr=pi_lr)
         self.vf_optimizer = Adam(self.policy.v.parameters(), lr=vf_lr)
+
+        # Keep for plotting 
+        self.avg_ep_len = 0.0
+        self.avg_ep_return = 0.0
 
     def predict(self, state):
         """return action give a state
@@ -221,33 +229,30 @@ class Generator:
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
-    def ppo(self, epochs=50, max_ep_len=1000, save_freq=10):
-        
+    def ppo(self, data=None, epochs=1):
+        """train with ppo
+        Args:
+            epochs (int, optional): training epoch. Defaults to 1.
+            data (list[Dict], optional): complete samples of (s,a,v,logp,s',r,d). Defaults to None.
+        """
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
-
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            for t in range(self.local_steps_per_epoch):
-                a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
-
-                next_o, r, d, _ = self.env.step(a)
-                if self.discriminator:
-                    score = self.discriminator.forward(
-                        torch.cat(
-                            (
-                                torch.as_tensor(o, dtype=torch.float32), 
-                                torch.unsqueeze(torch.as_tensor(a, dtype=torch.float32),0)
-                            )
-                        )
-                    )
-                    r = -(1 - score.item())
-                    ep_ret += r
+            iterator = data if data else range(self.local_steps_per_epoch) 
+            for i,t in enumerate(iterator):
+                # ! edited the original implementatiom to first train the discriminator
+                # when training the generator policy:
+                if data:
+                    o, a, v, logp, next_o, r, d = t['state'], t['action'], t['value'], t['logprop'], t['next_state'], t['reward'], t['done']
+                # when training the expert:
                 else:
-                    ep_ret += r
+                    a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
+                    next_o, r, d, _ = self.env.step(a)
+                # Get the discriminator scores and keep them as reward
+                ep_ret += r
                 ep_len += 1
-
                 # save and log
                 self.buf.store(o, a, r, v, logp)
                 self.logger.store(VVals=v)
@@ -255,9 +260,12 @@ class Generator:
                 # Update obs (critical!)
                 o = next_o
 
-                timeout = ep_len == max_ep_len
+                timeout = ep_len == self.max_ep_len
                 terminal = d or timeout
-                epoch_ended = t==self.local_steps_per_epoch-1
+                if data:
+                    epoch_ended = i==len(data)-1
+                else:
+                    epoch_ended = t==self.local_steps_per_epoch-1
 
                 if terminal or epoch_ended:
                     if epoch_ended and not(terminal):
@@ -273,14 +281,9 @@ class Generator:
                         self.logger.store(EpRet=ep_ret, EpLen=ep_len)
                     o, ep_ret, ep_len = self.env.reset(), 0, 0
 
-
-            # Save model
-            if (epoch % save_freq == 0) or (epoch == epochs-1):
-                self.logger.save_state({'env': self.env}, None)
-
             # Perform PPO update!
             self.update()
-
+            
             # Log info about epoch
             self.logger.log_tabular('EpLen', average_only=True)
             self.logger.log_tabular('Epoch', epoch)
@@ -296,7 +299,24 @@ class Generator:
             self.logger.log_tabular('ClipFrac', average_only=True)
             self.logger.log_tabular('StopIter', average_only=True)
             self.logger.log_tabular('Time', time.time()-start_time)
+            self.avg_ep_len = self.logger.log_current_row['EpLen']
+            self.avg_ep_return = self.logger.log_current_row['AverageEpRet']
             self.logger.dump_tabular()
+
+    def load_state_dict(self, state_dict):
+        """apply nn.module.load_state_dict() on the policy
+
+        Args:
+            state_dict (dict): the parameters of another policy
+        """
+        self.policy.load_state_dict(state_dict)
+    
+    def get_state_dict(self):
+        """return the policy state, to apply it on another policy
+        """
+        return self.policy.state_dict()
+
+
 
 
 class PPOBuffer:
@@ -306,7 +326,7 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
+    def __init__(self, obs_dim, act_dim, size, gamma=0.995, lam=0.97):
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
@@ -372,4 +392,3 @@ class PPOBuffer:
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
-
