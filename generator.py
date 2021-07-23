@@ -229,24 +229,17 @@ class Generator:
                         DeltaLossPi=(loss_pi.item() - pi_l_old),
                         DeltaLossV=(loss_v.item() - v_l_old))
 
-    def ppo(self, data=None, epochs=1, avg_reward=False):
+    def ppo(self, data=None, epochs=1):
         """train with ppo
-
         Args:
             epochs (int, optional): training epoch. Defaults to 1.
             data (list[Dict], optional): complete samples of (s,a,v,logp,s',r,d). Defaults to None.
-            avg_reward (bool, optional): If using disc, whether to use the average for the rewards. Defaults to False.
         """
         # Prepare for interaction with environment
         start_time = time.time()
         o, ep_ret, ep_len = self.env.reset(), 0, 0
         # Main loop: collect experience in env and update/log each epoch
         for epoch in range(epochs):
-            
-            if avg_reward:
-                avg = torch.mean(torch.cat([i['reward'] for i in data]))
-                for sample in data:
-                    sample['reward'] = torch.unsqueeze(avg,0)
             iterator = data if data else range(self.local_steps_per_epoch) 
             for i,t in enumerate(iterator):
                 # ! edited the original implementatiom to first train the discriminator
@@ -256,12 +249,10 @@ class Generator:
                 # when training the expert:
                 else:
                     a, v, logp = self.policy.step(torch.as_tensor(o, dtype=torch.float32))
-
                     next_o, r, d, _ = self.env.step(a)
                 # Get the discriminator scores and keep them as reward
                 ep_ret += r
                 ep_len += 1
-
                 # save and log
                 self.buf.store(o, a, r, v, logp)
                 self.logger.store(VVals=v)

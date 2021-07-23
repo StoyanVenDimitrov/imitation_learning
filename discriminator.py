@@ -1,9 +1,6 @@
-from numpy import exp
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
-from torch.nn.modules.activation import ReLU
 
 
 class Discriminator(nn.Module):
@@ -19,7 +16,6 @@ class Discriminator(nn.Module):
             nn.Linear(in_features=hidden_shape, out_features=hidden_shape, bias=True),
             nn.Tanh(),
             nn.Linear(in_features=hidden_shape, out_features=1, bias=True), # final
-            # nn.Sigmoid() # use BCEWithLogitsLoss instead
         )
         self.optimizer = optim.Adam(self.parameters(), lr=learning_rate)
 
@@ -28,19 +24,13 @@ class Discriminator(nn.Module):
 
     def train(self, expert_trajectories, policy_trajectories):
         """train to distinguish expert from generated data
-        Best practices taken from DCGAN tutorial of pytorch
          Args:
-            expert_trajectories ([type])
+            expert_trajectories (List)
             policy_trajectories ([type])
         Return:
             error, mean of the predicted score for expert samples and same for the generator samples
         """
         criterion = nn.BCEWithLogitsLoss()
-        # criterion = nn.BCELoss()
-
-        # ! check network input 
-        # cat_inputs = th.cat((obs, acts), dim=1)
-        
         expert_output = torch.cat([self.forward(torch.cat((state, action))) 
                             for state, action in zip(expert_trajectories['state'], torch.unsqueeze(expert_trajectories['action'], 1))])
         policy_output = torch.cat([self.forward(torch.cat((state, action))) 
