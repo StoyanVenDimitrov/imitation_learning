@@ -30,9 +30,6 @@ class GAIL:
         self.discriminator = Discriminator(state_shape=self.env.observation_space.shape[0], learning_rate=DISC_L_RATE)
         self.generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         # make one generator that learns from the original reward
-        # self.avg_rew_generator = Generator(self.env, self.discriminator, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
-        # self.avg_rew_generator.load_state_dict(self.generator.get_state_dict())
-        # make one generator that learns from the original reward
         self.probe_generator = Generator(self.env, None, max_ep_len=MAX_EP_LEN, steps_per_epoch=GENERATOR_TIMESTEPS)
         self.probe_generator.load_state_dict(self.generator.get_state_dict())
 
@@ -128,7 +125,6 @@ class GAIL:
                 data = self._assign_rewards(gen_pairs)
                 
                 self.generator.ppo(data=data)  
-                # self.avg_rew_generator.ppo(data=gen_pairs, avg_reward=True)
                 self.probe_generator.ppo()
 
                 # for the plots:   
